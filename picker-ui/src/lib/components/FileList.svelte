@@ -6,6 +6,7 @@
     entryVisible,
     getTreeState,
     navigateTo,
+    showNotice,
     toggleSelected,
     MULTI_SELECT_CAP,
   } from "$lib/stores/fileTree.svelte";
@@ -55,6 +56,7 @@
         // selected folder rides home in the response. Double-click
         // navigates (handled in `rowDblClick`).
         if (state.selected.size >= MULTI_SELECT_CAP && !state.selected.has(entry.path)) {
+          showNotice(`Selection limit reached (${MULTI_SELECT_CAP}).`);
           return;
         }
         toggleSelected(entry.path, true);
@@ -78,9 +80,7 @@
     }
     if (multiple) {
       if (state.selected.size >= MULTI_SELECT_CAP && !state.selected.has(entry.path)) {
-        // The cap is generous (256); silently dropping further
-        // additions would confuse the user, so we no-op and assume
-        // a future toast (added in F2.5) surfaces it.
+        showNotice(`Selection limit reached (${MULTI_SELECT_CAP}).`);
         return;
       }
       toggleSelected(entry.path, true);
@@ -102,6 +102,9 @@
 </script>
 
 <div class="file-list" class:loading={state.loading}>
+  {#if state.notice}
+    <div class="notice" role="status" aria-live="polite">{state.notice}</div>
+  {/if}
   {#if state.loadError}
     <div class="error">
       <p>Could not list directory: {state.loadError}</p>
@@ -206,5 +209,26 @@
 
   .error {
     color: var(--color-danger);
+  }
+
+  .notice {
+    padding: 8px 16px;
+    font-size: 0.8125rem;
+    color: var(--color-fg-app);
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+    text-align: center;
+    animation: notice-in 120ms ease-out;
+  }
+
+  @keyframes notice-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 </style>

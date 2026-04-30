@@ -22,6 +22,9 @@ interface FileTreeState {
   loading: boolean;
   saveFilename: string;
   loadError: string | null;
+  /// Transient user-visible notice (e.g. "selection limit reached").
+  /// Auto-clears after 3 s. `null` when nothing to show.
+  notice: string | null;
 }
 
 const state = $state<FileTreeState>({
@@ -33,7 +36,26 @@ const state = $state<FileTreeState>({
   loading: false,
   saveFilename: "",
   loadError: null,
+  notice: null,
 });
+
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/// Show a transient notice for 3 s. Replaces an existing notice
+/// (instead of stacking) — picker UI is small and stacking
+/// notices would overflow the window. Used for the multi-select
+/// cap announcement (E22) and reserved for similar future
+/// short-lived signals.
+export function showNotice(message: string) {
+  if (noticeTimer !== null) {
+    clearTimeout(noticeTimer);
+  }
+  state.notice = message;
+  noticeTimer = setTimeout(() => {
+    state.notice = null;
+    noticeTimer = null;
+  }, 3000);
+}
 
 /// Monotonically-increasing navigation id. Each `navigateTo` bumps
 /// it before the async `list_directory` call; the response is only

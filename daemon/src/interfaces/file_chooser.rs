@@ -38,6 +38,14 @@ const RESULT_URIS: &str = "uris";
 /// time. Echoed only when the picker actually carried one.
 const RESULT_CURRENT_FILTER: &str = "current_filter";
 
+/// Wall-clock timeout per FileChooser request (E13). Five minutes
+/// is generous enough that real users browsing slow filesystems
+/// have time to think while still bounding orphaned requests when
+/// the Wayland compositor or the frontend portal daemon vanishes
+/// mid-pick. Tests override this via `cfg(test)` if needed; runtime
+/// changes would require config plumbing we have not added.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Clone)]
 pub struct FileChooser {
     state: DaemonState,
@@ -64,6 +72,7 @@ impl FileChooser {
     ) -> (u32, HashMap<String, OwnedValue>) {
         let _guard = self.state.track_request();
         let req = RequestHandle::from_object_path(request_path.into());
+        let req_id = req.path.to_string();
 
         if let Err(e) = self.state.picker_lifecycle.ensure_running().await {
             tracing::warn!(request = %req.path, method, error = %e, "picker-ui spawn failed");
@@ -78,13 +87,35 @@ impl FileChooser {
             }
         };
 
-        let response = match rx.await {
-            Ok(r) => r,
-            Err(_) => {
+        // E13 wall-clock cap. If the picker UI hangs for any reason
+        // (frontend portal daemon disappears, Wayland compositor
+        // restarts, user walks away for an hour), we drop the
+        // pending slot and tell the picker to dismiss the dialog
+        // so the next request starts fresh.
+        let response = match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(_)) => {
                 tracing::warn!(request = %req.path, method, "picker IPC oneshot dropped");
                 return (
                     response::OTHER,
                     error_results("picker IPC channel closed"),
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    request = %req.path,
+                    method,
+                    timeout_secs = REQUEST_TIMEOUT.as_secs(),
+                    "request timed out"
+                );
+                self.state.picker_ipc.cancel_pending(&req_id).await;
+                self.state.picker_ipc.try_send_cancel(&req_id).await;
+                return (
+                    response::OTHER,
+                    error_results(&format!(
+                        "request timed out after {} seconds",
+                        REQUEST_TIMEOUT.as_secs()
+                    )),
                 );
             }
         };

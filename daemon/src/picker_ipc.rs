@@ -173,6 +173,30 @@ impl PickerIpcHandle {
         }
     }
 
+    /// Drop the correlation slot for `handle` so a stale response
+    /// arriving later cannot wake a long-gone receiver. Used by
+    /// FileChooser when its per-request timeout fires (E13).
+    pub async fn cancel_pending(&self, handle: &str) {
+        self.inner.pending.lock().await.remove(handle);
+    }
+
+    /// Best-effort: send `PickerRequest::Cancel` to the picker so
+    /// it hides its window. Used after a wall-clock timeout when
+    /// the daemon has already given up on the response — the
+    /// picker would otherwise sit there until the next click.
+    pub async fn try_send_cancel(&self, handle: &str) {
+        let req = PickerRequest::Cancel {
+            handle: handle.to_string(),
+        };
+        let Ok(frame) = encode_frame(&req) else {
+            return;
+        };
+        let mut writer = self.inner.writer.lock().await;
+        if let Some(w) = writer.as_mut() {
+            let _ = w.write_all(&frame).await;
+        }
+    }
+
     /// Submit a request to the picker-ui and return a receiver that
     /// resolves to the response.
     ///
@@ -309,8 +333,16 @@ async fn connection_task(stream: UnixStream, handle: PickerIpcHandle) {
         }
     }
 
-    // Connection lost. Drop the writer and synthetically Cancel every
-    // pending request so D-Bus method handlers unblock.
+    // Connection lost. A still-pending request at this point means
+    // the picker disappeared without responding — that is a backend
+    // failure, not a user-initiated cancel. Codex flagged the
+    // earlier `Cancelled` synthesis here as the same kind of fake-
+    // user-cancel that the F1 stubs were caught doing. Synthesising
+    // `Error` keeps the trace honest.
+    //
+    // Orderly cancels never reach this code: respond() in the
+    // picker UI sends a Cancelled frame BEFORE hide(), which
+    // removes the entry from `pending` via `deliver_response`.
     {
         let mut writer = handle.inner.writer.lock().await;
         *writer = None;
@@ -320,7 +352,10 @@ async fn connection_task(stream: UnixStream, handle: PickerIpcHandle) {
         map.drain().collect()
     };
     for (handle_id, tx) in pending {
-        let _ = tx.send(PickerResponse::Cancelled { handle: handle_id });
+        let _ = tx.send(PickerResponse::Error {
+            handle: handle_id,
+            message: "picker-ui disconnected without responding".into(),
+        });
     }
 }
 
@@ -510,6 +545,60 @@ mod tests {
             "submit should fail when no picker connected"
         );
         assert!(handle.inner.pending.lock().await.is_empty());
+    }
+
+    /// Codex E11 regression: when the picker disconnects with a
+    /// request still pending, the daemon must synthesise `Error`
+    /// (backend failure) rather than `Cancelled` (which would lie
+    /// that the user dismissed the dialog).
+    #[tokio::test]
+    async fn disconnect_with_pending_synthesises_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("crash.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let handle = fresh_handle();
+        let accept = handle.clone();
+        tokio::spawn(async move {
+            accept_loop(listener, accept).await;
+        });
+
+        // Fake client connects, reads one frame, then drops the
+        // connection without replying — simulates a picker crash
+        // while a request is in flight.
+        let socket_clone = socket.clone();
+        tokio::spawn(async move {
+            let mut client = UnixStream::connect(&socket_clone).await.unwrap();
+            let mut chunk = [0u8; 4096];
+            let _ = client.read(&mut chunk).await; // drain at least the header
+            // Drop client without writing a response.
+            drop(client);
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let req = PickerRequest::OpenFile {
+            handle: "crash-1".into(),
+            app_id: "".into(),
+            title: "".into(),
+            filters: vec![],
+            current_filter: None,
+            multiple: false,
+            modal: false,
+            directory: false,
+            current_folder: None,
+            parent_window: None,
+        };
+        let rx = handle.submit(req).await.expect("submit must succeed");
+        let response = rx.await.expect("oneshot resolves on disconnect");
+        match response {
+            PickerResponse::Error { handle, message } => {
+                assert_eq!(handle, "crash-1");
+                assert!(
+                    message.contains("disconnected"),
+                    "error message should mention disconnect: {message}"
+                );
+            }
+            other => panic!("expected Error on disconnect-with-pending, got {other:?}"),
+        }
     }
 
     /// Codex P1 regression: a submit started before the picker
