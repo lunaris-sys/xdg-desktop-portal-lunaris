@@ -30,6 +30,29 @@ fn stub_results(method: &str) -> HashMap<String, OwnedValue> {
     map
 }
 
+/// Coarse summary of a URI for log lines: `scheme://host` only, with
+/// path/query/fragment stripped. URIs frequently carry secrets in the
+/// query (OAuth callbacks, signed download links) or in the path
+/// (document identifiers, share tokens) and we are not in the business
+/// of persisting those to the journal. The full URI is only available
+/// at trace level for explicit debugging sessions.
+fn redact_uri(uri: &str) -> String {
+    if let Some(scheme_end) = uri.find("://") {
+        let after_scheme = &uri[scheme_end + 3..];
+        let host_end = after_scheme
+            .find(['/', '?', '#'])
+            .unwrap_or(after_scheme.len());
+        let host = &after_scheme[..host_end];
+        return format!("{}://{}/...", &uri[..scheme_end], host);
+    }
+    // Schemes without an authority (mailto:, tel:, javascript:): keep
+    // only the part before the first separator.
+    if let Some(colon) = uri.find(':') {
+        return format!("{}:...", &uri[..colon]);
+    }
+    "<unparseable>".to_string()
+}
+
 #[derive(Clone)]
 pub struct OpenUri {
     state: DaemonState,
@@ -64,9 +87,11 @@ impl OpenUri {
             request = %req.path,
             app_id,
             parent_window,
-            uri,
+            uri = %redact_uri(uri),
             "OpenURI (F1 stub: backend not implemented, returning OTHER)"
         );
+        // Full URI only at trace level for explicit debug sessions.
+        tracing::trace!(uri, "OpenURI full URI (trace only)");
         (response::OTHER, stub_results("OpenURI"))
     }
 
@@ -99,5 +124,35 @@ mod tests {
     fn stub_results_carries_sentinel() {
         let r = stub_results("OpenURI");
         assert!(r.contains_key(STUB_ERROR_KEY));
+    }
+
+    /// http(s) URIs keep scheme + host but drop everything after the
+    /// host. Real-world URIs that motivated this: signed download
+    /// links and OAuth callbacks that carry secrets in the query.
+    #[test]
+    fn redact_strips_path_and_query() {
+        assert_eq!(
+            redact_uri("https://example.com/secret?token=abc#frag"),
+            "https://example.com/..."
+        );
+        assert_eq!(
+            redact_uri("http://api.example.com:8443/path"),
+            "http://api.example.com:8443/..."
+        );
+    }
+
+    /// Schemes without an authority (mailto:, tel:, javascript:)
+    /// collapse to `scheme:...`. The body of a `mailto:` URL is
+    /// already a privacy concern (recipient list).
+    #[test]
+    fn redact_collapses_authorityless_schemes() {
+        assert_eq!(redact_uri("mailto:secret@example.com"), "mailto:...");
+        assert_eq!(redact_uri("tel:+1-555-0100"), "tel:...");
+    }
+
+    #[test]
+    fn redact_handles_empty_and_garbage() {
+        assert_eq!(redact_uri(""), "<unparseable>");
+        assert_eq!(redact_uri("not-a-uri"), "<unparseable>");
     }
 }
