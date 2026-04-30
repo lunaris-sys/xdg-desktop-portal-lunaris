@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "daemon",
+    "protocol",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/lunaris-sys/xdg-desktop-portal-lunaris"
+authors = ["Tim Kicker <tim@lunaris-sys.org>"]
+
+[workspace.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "process", "fs", "net", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"

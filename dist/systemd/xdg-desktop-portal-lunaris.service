@@ -1,0 +1,12 @@
+[Unit]
+Description=Lunaris xdg-desktop-portal backend (FileChooser, OpenURI)
+Documentation=https://github.com/lunaris-sys/xdg-desktop-portal-lunaris
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.lunaris
+ExecStart=/usr/lib/lunaris/libexec/xdg-desktop-portal-lunaris
+Restart=on-failure
+RestartSec=2
+Slice=session.slice

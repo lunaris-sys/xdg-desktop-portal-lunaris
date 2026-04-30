@@ -1,0 +1,26 @@
+[package]
+name = "xdg-desktop-portal-lunaris"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Lunaris backend for xdg-desktop-portal (FileChooser, OpenURI)"
+
+[[bin]]
+name = "xdg-desktop-portal-lunaris"
+path = "src/main.rs"
+
+[dependencies]
+xdg-portal-lunaris-protocol = { path = "../protocol" }
+zbus = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

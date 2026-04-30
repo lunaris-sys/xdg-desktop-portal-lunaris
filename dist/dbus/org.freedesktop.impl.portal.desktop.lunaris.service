@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.lunaris
+Exec=/usr/lib/lunaris/libexec/xdg-desktop-portal-lunaris
+SystemdService=xdg-desktop-portal-lunaris.service

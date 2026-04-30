@@ -1,0 +1,12 @@
+[package]
+name = "xdg-portal-lunaris-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Wire types shared between xdg-desktop-portal-lunaris daemon and picker-ui"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
