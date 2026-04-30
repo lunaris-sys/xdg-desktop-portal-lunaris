@@ -33,16 +33,22 @@ fn socket_path() -> Result<PathBuf> {
 }
 
 /// Cheap-clone handle the `picker_respond` Tauri command uses to
-/// write replies back to the daemon.
+/// write replies back to the daemon. Also holds the most recent
+/// pending picker request so the frontend can fetch it on mount —
+/// Tauri events emitted before the webview's `listen()` call has
+/// registered are silently lost, so the event path alone races
+/// against webview load.
 #[derive(Clone)]
 pub struct DaemonClient {
     writer: Arc<Mutex<Option<tokio::net::unix::OwnedWriteHalf>>>,
+    pending_request: Arc<Mutex<Option<PickerRequest>>>,
 }
 
 impl DaemonClient {
     pub fn new() -> Self {
         Self {
             writer: Arc::new(Mutex::new(None)),
+            pending_request: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -60,6 +66,21 @@ impl DaemonClient {
             .await
             .context("write picker response")?;
         Ok(())
+    }
+
+    /// Atomically take the pending request (or return None if none
+    /// is staged). The frontend invokes the matching Tauri command
+    /// on mount; the event-based path then takes over for future
+    /// requests.
+    pub async fn take_pending(&self) -> Option<PickerRequest> {
+        self.pending_request.lock().await.take()
+    }
+
+    /// Replace the pending-request slot. Called from `handle_request`
+    /// before emitting the Tauri event so the frontend has a stable
+    /// fallback if the event arrives during webview load.
+    pub async fn set_pending(&self, request: PickerRequest) {
+        *self.pending_request.lock().await = Some(request);
     }
 }
 
@@ -89,8 +110,9 @@ pub async fn connect(app: AppHandle, client: DaemonClient) -> Result<()> {
     tracing::info!(socket = %path.display(), "connected to daemon");
 
     let app_clone = app.clone();
+    let client_clone = client.clone();
     tokio::spawn(async move {
-        if let Err(e) = read_loop(read_half, app_clone.clone()).await {
+        if let Err(e) = read_loop(read_half, app_clone.clone(), client_clone).await {
             tracing::warn!("daemon read loop ended: {e}");
         }
         // Exit so the daemon respawns a fresh picker on next request.
@@ -100,7 +122,11 @@ pub async fn connect(app: AppHandle, client: DaemonClient) -> Result<()> {
     Ok(())
 }
 
-async fn read_loop(mut reader: tokio::net::unix::OwnedReadHalf, app: AppHandle) -> Result<()> {
+async fn read_loop(
+    mut reader: tokio::net::unix::OwnedReadHalf,
+    app: AppHandle,
+    client: DaemonClient,
+) -> Result<()> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     loop {
@@ -113,7 +139,7 @@ async fn read_loop(mut reader: tokio::net::unix::OwnedReadHalf, app: AppHandle) 
             match decode_frame::<PickerRequest>(&buf) {
                 Ok((consumed, request)) => {
                     buf.drain(..consumed);
-                    handle_request(&app, request).await;
+                    handle_request(&app, &client, request).await;
                 }
                 Err(xdg_portal_lunaris_protocol::codec::CodecError::Incomplete { .. }) => break,
                 Err(e) => {
@@ -124,7 +150,7 @@ async fn read_loop(mut reader: tokio::net::unix::OwnedReadHalf, app: AppHandle) 
     }
 }
 
-async fn handle_request(app: &AppHandle, request: PickerRequest) {
+async fn handle_request(app: &AppHandle, client: &DaemonClient, request: PickerRequest) {
     match &request {
         PickerRequest::Cancel { handle } => {
             // Daemon-initiated cancel: hide the window and forward as
@@ -137,6 +163,12 @@ async fn handle_request(app: &AppHandle, request: PickerRequest) {
             let _ = app.emit("picker:cancel", handle.clone());
         }
         _ => {
+            tracing::info!("picker-ui received request from daemon, staging + showing window + emitting picker:request");
+            // Stage the request so the frontend can fetch it on
+            // mount. Tauri events fired before the Svelte listener
+            // has registered are silently dropped, so the event path
+            // alone races webview load.
+            client.set_pending(request.clone()).await;
             // Show the window and emit the request to the frontend.
             if let Some(w) = app.get_webview_window("picker") {
                 if let Err(e) = w.show() {
@@ -145,9 +177,12 @@ async fn handle_request(app: &AppHandle, request: PickerRequest) {
                 if let Err(e) = w.set_focus() {
                     tracing::warn!("focus picker window: {e}");
                 }
+            } else {
+                tracing::warn!("picker-ui webview 'picker' window not found");
             }
-            if let Err(e) = app.emit("picker:request", request) {
-                tracing::warn!("emit picker:request event: {e}");
+            match app.emit("picker:request", request) {
+                Ok(_) => tracing::info!("picker:request event emitted"),
+                Err(e) => tracing::warn!("emit picker:request event: {e}"),
             }
         }
     }

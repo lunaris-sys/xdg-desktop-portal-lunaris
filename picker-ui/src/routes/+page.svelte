@@ -10,7 +10,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { ArrowLeft, EyeOff, Eye } from "lucide-svelte";
 
-  import { initPickerBridge, respond } from "$lib/ipc";
+  import { applyTheme, initPickerBridge, respond } from "$lib/ipc";
   import { getPickState } from "$lib/stores/pickState.svelte";
   import {
     getTreeState,
@@ -36,6 +36,7 @@
   let lastInitedHandle = $state<string | null>(null);
 
   onMount(() => {
+    applyTheme();
     initPickerBridge();
   });
 
@@ -239,8 +240,8 @@
 
 <main class="picker-shell">
   {#if pickState.request}
-    <header>
-      <div class="title-row">
+    <header data-tauri-drag-region>
+      <div class="title-row" data-tauri-drag-region>
         <button
           type="button"
           class="back"
@@ -250,7 +251,7 @@
         >
           <ArrowLeft size={14} strokeWidth={2} />
         </button>
-        <h1>{pickState.request.title || (directoriesOnly ? "Choose folder" : "Open file")}</h1>
+        <h1 data-tauri-drag-region>{pickState.request.title || (directoriesOnly ? "Choose folder" : "Open file")}</h1>
         <button
           type="button"
           class="hidden-toggle"

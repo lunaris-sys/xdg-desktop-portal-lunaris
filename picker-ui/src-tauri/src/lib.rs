@@ -5,11 +5,12 @@
 
 mod fs_commands;
 mod ipc_client;
+mod theme;
 
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
-use xdg_portal_lunaris_protocol::PickerResponse;
+use xdg_portal_lunaris_protocol::{PickerRequest, PickerResponse};
 
 use ipc_client::{connect, DaemonClient};
 
@@ -35,6 +36,42 @@ async fn picker_respond(
         let _ = w.hide();
     }
     Ok(())
+}
+
+/// Tauri command: return the user's resolved Lunaris theme so the
+/// frontend can inject matching CSS variables on mount. Falls back
+/// to dark defaults on any failure to read appearance.toml.
+#[tauri::command]
+fn get_theme() -> theme::Theme {
+    theme::load_theme()
+}
+
+/// Tauri command: route a frontend log line into the daemon's
+/// log stream. The picker UI cannot reach DevTools, so frontend
+/// diagnostics need a back channel into the journal.
+#[tauri::command]
+fn frontend_log(level: String, msg: String) {
+    match level.as_str() {
+        "warn" => tracing::warn!("[picker-ui-frontend] {msg}"),
+        "error" => tracing::error!("[picker-ui-frontend] {msg}"),
+        _ => tracing::info!("[picker-ui-frontend] {msg}"),
+    }
+}
+
+/// Tauri command: atomically take the pending picker request (if
+/// any). The Svelte frontend invokes this on mount so it can
+/// recover requests whose `picker:request` Tauri event fired before
+/// the listener was registered.
+#[tauri::command]
+async fn picker_take_pending(
+    state: State<'_, Arc<PickerState>>,
+) -> Result<Option<PickerRequest>, String> {
+    let pending = state.client.take_pending().await;
+    tracing::info!(
+        has_pending = pending.is_some(),
+        "picker_take_pending invoked from frontend"
+    );
+    Ok(pending)
 }
 
 /// Tauri entry point invoked from `main.rs`.
@@ -70,6 +107,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             picker_respond,
+            picker_take_pending,
+            frontend_log,
+            get_theme,
             fs_commands::list_directory,
             fs_commands::resolve_start_dir,
             fs_commands::parent_dir,

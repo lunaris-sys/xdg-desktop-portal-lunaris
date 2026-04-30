@@ -9,7 +9,7 @@
   }
 
   let { filters }: Props = $props();
-  const state = getTreeState();
+  const tree = getTreeState();
 
   let open = $state(false);
 
@@ -18,7 +18,7 @@
     open = false;
   }
 
-  let label = $derived(state.activeFilter?.name ?? "All files");
+  let label = $derived(tree.activeFilter?.name ?? "All files");
 
   // Filter init lives in `+page.svelte` because it needs the request's
   // `currentFilter`; doing it here would always default to filters[0]
@@ -39,7 +39,7 @@
             <button
               type="button"
               class="item"
-              class:active={state.activeFilter?.name === filter.name}
+              class:active={tree.activeFilter?.name === filter.name}
               onclick={() => pick(filter)}
             >
               {filter.name}
@@ -51,7 +51,7 @@
           <button
             type="button"
             class="item"
-            class:active={!state.activeFilter}
+            class:active={!tree.activeFilter}
             onclick={() => pick(null)}
           >
             All files

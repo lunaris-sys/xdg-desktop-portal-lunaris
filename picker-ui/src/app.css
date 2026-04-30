@@ -27,6 +27,16 @@ html, body {
   font-family: -apple-system, system-ui, sans-serif;
   font-size: 0.875rem;
   overflow: hidden;
+  /* Picker chrome shouldn't be selectable text — clicks should
+   * always trigger UI actions, never start a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Inputs / textareas need text selection for editing. */
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 button {

@@ -26,7 +26,7 @@ use xdg_portal_lunaris_protocol::{FileFilter, PickerRequest, PickerResponse};
 use crate::document_portal;
 use crate::interfaces::options;
 use crate::request::{response, RequestHandle};
-use crate::sandbox::{self, CallerIdentity};
+use crate::sandbox::CallerIdentity;
 use crate::state::DaemonState;
 
 /// Result-key the spec mandates for the URI list returned by
@@ -73,6 +73,13 @@ impl FileChooser {
         let _guard = self.state.track_request();
         let req = RequestHandle::from_object_path(request_path.into());
         let req_id = req.path.to_string();
+        tracing::info!(
+            method,
+            request = %req.path,
+            ?identity,
+            writable,
+            "FileChooser dispatch entered"
+        );
 
         if let Err(e) = self.state.picker_lifecycle.ensure_running().await {
             tracing::warn!(request = %req.path, method, error = %e, "picker-ui spawn failed");
@@ -126,6 +133,24 @@ impl FileChooser {
                 current_filter,
                 ..
             } => {
+                // Fail-closed on identity-resolution failure. Codex
+                // flagged that returning raw file:// to a possibly-
+                // sandboxed caller (because we coalesced the failure
+                // into Unconfined) is a Document-Portal-bypass.
+                // Real-world D-Bus glitches are rare; surfacing them
+                // as a backend error here is preferable to silently
+                // exposing host paths.
+                if !identity.is_known() {
+                    tracing::warn!(
+                        request = %req.path,
+                        method,
+                        "rejecting picked response: caller identity could not be determined"
+                    );
+                    return (
+                        response::OTHER,
+                        error_results("could not determine caller identity"),
+                    );
+                }
                 // Save paths come back from the picker UI as
                 // `<currentDir>/<filename>` where filename is user-
                 // typed. Defense in depth against the path-traversal
@@ -222,34 +247,28 @@ async fn build_uris_for_caller(
     }
 }
 
-/// Resolve the calling D-Bus connection's PID and turn it into a
-/// sandbox identity. Unconfined-on-error: a missing PID or unreachable
-/// `org.freedesktop.DBus` is treated as unconfined rather than
-/// rejecting the call, since portal callers always have a valid
-/// connection in practice and the cost of a wrong unconfined
-/// classification is "we hand back a raw `file://` URI", which only
-/// breaks the call for actually sandboxed callers — and the picker
-/// would have been pointless to show in the first place if we
-/// reject unconditionally.
-async fn caller_identity(
-    header: &zbus::message::Header<'_>,
-    connection: &zbus::Connection,
-) -> CallerIdentity {
-    let Some(sender) = header.sender() else {
-        return CallerIdentity::Unconfined;
-    };
-    let dbus = match zbus::fdo::DBusProxy::new(connection).await {
-        Ok(p) => p,
-        Err(_) => return CallerIdentity::Unconfined,
-    };
-    let pid = match dbus
-        .get_connection_unix_process_id(sender.clone().into())
-        .await
-    {
-        Ok(p) => p,
-        Err(_) => return CallerIdentity::Unconfined,
-    };
-    sandbox::detect(pid)
+/// Determine caller identity from the frontend-supplied `app_id`
+/// argument.
+///
+/// The impl-portal interface receives `app_id` set by the
+/// `xdg-desktop-portal` frontend AFTER it has verified the caller
+/// (by inspecting `.flatpak-info`, the snap cgroup, etc.). We trust
+/// that verdict.
+///
+/// We deliberately do NOT use cgroup-based detection here even
+/// though the helper exists in `crate::sandbox` — Flatpak callers
+/// reach the bus through `xdg-dbus-proxy`, and `GetConnectionUnixProcessID`
+/// reports the proxy's host-PID. Reading that PID's cgroup yields
+/// the user-session scope (not the app's bubblewrap scope), so the
+/// detection silently classifies real Flatpak callers as Unconfined.
+/// The frontend's `app_id` argument sidesteps the proxy entirely.
+fn caller_identity(method_app_id: &str) -> CallerIdentity {
+    if !method_app_id.is_empty() {
+        return CallerIdentity::Flatpak {
+            app_id: method_app_id.to_string(),
+        };
+    }
+    CallerIdentity::Unconfined
 }
 
 fn success_results(
@@ -369,10 +388,9 @@ impl FileChooser {
         parent_window: &str,
         title: &str,
         opts: HashMap<&str, OwnedValue>,
-        #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> (u32, HashMap<String, OwnedValue>) {
-        let identity = caller_identity(&header, connection).await;
+        let identity = caller_identity(app_id);
         let request = PickerRequest::OpenFile {
             handle: handle.to_string(),
             app_id: app_id.to_string(),
@@ -396,10 +414,9 @@ impl FileChooser {
         parent_window: &str,
         title: &str,
         opts: HashMap<&str, OwnedValue>,
-        #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> (u32, HashMap<String, OwnedValue>) {
-        let identity = caller_identity(&header, connection).await;
+        let identity = caller_identity(app_id);
         let request = PickerRequest::SaveFile {
             handle: handle.to_string(),
             app_id: app_id.to_string(),
@@ -422,10 +439,9 @@ impl FileChooser {
         parent_window: &str,
         title: &str,
         opts: HashMap<&str, OwnedValue>,
-        #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> (u32, HashMap<String, OwnedValue>) {
-        let identity = caller_identity(&header, connection).await;
+        let identity = caller_identity(app_id);
         let request = PickerRequest::SaveFiles {
             handle: handle.to_string(),
             app_id: app_id.to_string(),

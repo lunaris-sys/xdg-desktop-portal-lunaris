@@ -1,3 +1,13 @@
+// FA7 originally derived caller identity from `/proc/<pid>/cgroup`.
+// In practice the impl-portal interface receives a frontend-verified
+// `app_id` argument and Flatpak callers reach the bus via
+// `xdg-dbus-proxy` (whose own cgroup is the user-session scope, not
+// the bubblewrap scope), so cgroup detection silently misclassifies
+// real Flatpak callers as Unconfined. The cgroup helpers below are
+// kept for diagnostic use and a future fallback path that does not
+// require D-Bus PID lookup, but no production code calls them today.
+#![allow(dead_code)]
+
 //! Caller sandbox / app-id detection (FA7).
 //!
 //! Portal callers can pass `app_id` in their method arguments, but the
@@ -31,17 +41,34 @@ pub enum CallerIdentity {
     /// have not explicitly detected. The caller can do whatever the
     /// invoking user can do regardless of what app_id they pass.
     Unconfined,
+    /// Identity could not be determined: D-Bus message had no
+    /// sender header, `org.freedesktop.DBus` was unreachable, or
+    /// PID-to-cgroup lookup failed. Authorization decisions that
+    /// touch a security boundary (file:// access through the host)
+    /// must fail-closed for this state — Codex review found that
+    /// silently coalescing this into `Unconfined` would let a
+    /// transient D-Bus glitch waive the sandbox check.
+    Unknown,
 }
 
 impl CallerIdentity {
     /// Best-effort app-id string suitable for logs and Document
-    /// Portal calls. `None` for unconfined callers.
+    /// Portal calls. `None` for unconfined callers and for the
+    /// Unknown failure state.
     pub fn app_id(&self) -> Option<&str> {
         match self {
             CallerIdentity::Flatpak { app_id } => Some(app_id),
             CallerIdentity::Snap { name } => Some(name),
-            CallerIdentity::Unconfined => None,
+            CallerIdentity::Unconfined | CallerIdentity::Unknown => None,
         }
+    }
+
+    /// True when sandbox detection produced a definite answer
+    /// (Flatpak / Snap / Unconfined). False only for Unknown.
+    /// Callers that need to fail-closed on identity-resolution
+    /// failures gate on this.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, CallerIdentity::Unknown)
     }
 }
 
@@ -153,8 +180,10 @@ mod tests {
         assert_eq!(parse_cgroup(content), CallerIdentity::Unconfined);
     }
 
-    /// `app_id()` returns the app id for confined callers and None
-    /// for unconfined.
+    /// `app_id()` returns the app id for confined callers, None
+    /// for both unconfined and unknown — Unknown deliberately
+    /// shares the no-app-id shape because it must not be treated
+    /// as "has app id with unknown app".
     #[test]
     fn app_id_accessor() {
         assert_eq!(
@@ -165,5 +194,22 @@ mod tests {
             Some("x")
         );
         assert_eq!(CallerIdentity::Unconfined.app_id(), None);
+        assert_eq!(CallerIdentity::Unknown.app_id(), None);
+    }
+
+    /// `is_known()` distinguishes the "we definitely couldn't
+    /// determine" state from any successful classification.
+    #[test]
+    fn is_known_accessor() {
+        assert!(CallerIdentity::Flatpak {
+            app_id: "x".into()
+        }
+        .is_known());
+        assert!(CallerIdentity::Snap {
+            name: "y".into()
+        }
+        .is_known());
+        assert!(CallerIdentity::Unconfined.is_known());
+        assert!(!CallerIdentity::Unknown.is_known());
     }
 }

@@ -36,9 +36,19 @@ const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.lunaris";
 /// The frontend always queries this exact path.
 const OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
 
-/// Idle window before the daemon exits when no requests are open. See
-/// FA10 and edge case E12 for the open-request-counter interaction.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default idle window before the daemon exits when no requests are
+/// open. Override via `LUNARIS_PORTAL_IDLE_TIMEOUT_SECS` (handy for
+/// dev sessions where 60 s would kick in mid-debug). See FA10 and
+/// edge case E12 for the open-request-counter interaction.
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60;
+
+fn idle_timeout() -> Duration {
+    let secs = std::env::var("LUNARIS_PORTAL_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -99,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
     let exit_signal = tokio::signal::ctrl_c();
     tokio::pin!(exit_signal);
 
+    let timeout = idle_timeout();
+    tracing::info!(idle_timeout_secs = timeout.as_secs(), "idle loop armed");
     let mut last_active = std::time::Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -112,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
                     last_active = std::time::Instant::now();
                     continue;
                 }
-                if last_active.elapsed() >= IDLE_TIMEOUT {
+                if last_active.elapsed() >= timeout {
                     tracing::info!(
                         idle_for_secs = last_active.elapsed().as_secs(),
                         "idle timeout reached, exiting"
