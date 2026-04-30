@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lunaris File Picker",
+  "version": "0.1.0",
+  "identifier": "org.lunaris.portal.picker",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1421",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "picker",
+        "title": "Lunaris File Picker",
+        "width": 800,
+        "height": 600,
+        "minWidth": 480,
+        "minHeight": 360,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "visible": false,
+        "center": true,
+        "skipTaskbar": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

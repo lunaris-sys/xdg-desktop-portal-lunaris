@@ -10,3 +10,4 @@ description = "Wire types shared between xdg-desktop-portal-lunaris daemon and p
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }

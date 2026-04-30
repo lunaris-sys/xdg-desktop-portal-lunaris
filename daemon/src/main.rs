@@ -7,10 +7,14 @@
 //!
 //! Architecture decisions and edge-case handling live in
 //! `docs/architecture/xdg-desktop-portal-lunaris.md`. This file is the
-//! plumbing: D-Bus bind, interface registration, lifecycle.
+//! plumbing: D-Bus bind, IPC server, picker pre-warm, idle loop.
 
+mod document_portal;
 mod interfaces;
+mod picker_ipc;
+mod picker_lifecycle;
 mod request;
+mod sandbox;
 mod state;
 
 use std::time::Duration;
@@ -19,6 +23,8 @@ use anyhow::Context;
 use zbus::connection;
 
 use crate::interfaces::{file_chooser::FileChooser, open_uri::OpenUri};
+use crate::picker_ipc::PickerIpcHandle;
+use crate::picker_lifecycle::PickerLifecycle;
 use crate::state::DaemonState;
 
 /// Well-known D-Bus name we register on the session bus. The
@@ -45,21 +51,37 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("starting xdg-desktop-portal-lunaris");
 
-    let state = DaemonState::new();
+    // Bring up the picker-IPC socket FIRST so the picker subprocess
+    // we spawn next finds a server to connect to. Order matters: a
+    // race where the picker connects before the listener exists
+    // would surface as a "connection refused" inside the picker and
+    // a needless respawn cycle.
+    let picker_ipc = PickerIpcHandle::start()
+        .await
+        .context("start picker IPC")?;
+    let picker_lifecycle = PickerLifecycle::new();
+
+    // Pre-warm: spawn the picker-ui process now so the first
+    // FileChooser call only pays the cost of a `.show()`, not the
+    // ~300 ms WebKitGTK init (FA5, edge case E24). If the picker
+    // binary is missing (devbox without a build), the spawn fails
+    // and the FileChooser handler will surface a clear error to
+    // callers when one finally arrives.
+    if let Err(e) = picker_lifecycle.ensure_running().await {
+        tracing::warn!(
+            "picker-ui pre-warm failed: {e}. FileChooser calls will fail until the binary is available."
+        );
+    }
+
+    let state = DaemonState::new(picker_ipc, picker_lifecycle);
 
     let _conn = connection::Builder::session()
         .context("failed to connect to session bus")?
         .name(BUS_NAME)
         .with_context(|| format!("failed to claim D-Bus name {BUS_NAME}"))?
-        .serve_at(
-            OBJECT_PATH,
-            FileChooser::new(state.clone()),
-        )
+        .serve_at(OBJECT_PATH, FileChooser::new(state.clone()))
         .with_context(|| format!("failed to serve FileChooser at {OBJECT_PATH}"))?
-        .serve_at(
-            OBJECT_PATH,
-            OpenUri::new(state.clone()),
-        )
+        .serve_at(OBJECT_PATH, OpenUri::new(state.clone()))
         .with_context(|| format!("failed to serve OpenURI at {OBJECT_PATH}"))?
         .build()
         .await
@@ -101,5 +123,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    state.picker_lifecycle.shutdown().await;
     Ok(())
 }

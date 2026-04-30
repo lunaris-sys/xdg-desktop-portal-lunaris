@@ -6,9 +6,12 @@
 //!
 //! Frame format (used by both directions): 4-byte big-endian length, then
 //! UTF-8 JSON body. Same as the notification daemon's broadcast socket.
+//! Encode/decode helpers live in [`codec`].
 //!
 //! All types use `rename_all = "camelCase"` because the picker-ui side
 //! crosses a Rust-TypeScript boundary inside Tauri.
+
+pub mod codec;
 
 use std::path::PathBuf;
 

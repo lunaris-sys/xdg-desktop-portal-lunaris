@@ -1,0 +1,36 @@
+[workspace]
+# Opt out of the daemon/protocol workspace at the repo root: this
+# crate carries Tauri-specific build dependencies and version pins
+# that should not be shared with the headless daemon.
+
+[package]
+name = "xdg-portal-lunaris-picker"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Tauri picker UI for xdg-desktop-portal-lunaris"
+
+[lib]
+name = "xdg_portal_lunaris_picker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "xdg-desktop-portal-lunaris-picker"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+xdg-portal-lunaris-protocol = { path = "../../protocol" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "sync", "time", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
