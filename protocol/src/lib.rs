@@ -43,6 +43,10 @@ pub enum PickerRequest {
         /// window. Wayland has no cross-app modal concept; the flag is
         /// recorded but not enforced.
         modal: bool,
+        /// Whether the picker is selecting directories, not files.
+        /// When true the listing hides files and the confirm action
+        /// returns the currently-displayed directory.
+        directory: bool,
         /// Where the picker opens. Falls back to `$HOME` if absent or
         /// invalid (path traversal, non-existent directory, outside the
         /// caller's allowed roots).
@@ -150,6 +154,7 @@ mod tests {
             current_filter: None,
             multiple: false,
             modal: true,
+            directory: false,
             current_folder: Some(PathBuf::from("/home/example/Pictures")),
             parent_window: Some("wayland:42".into()),
         };

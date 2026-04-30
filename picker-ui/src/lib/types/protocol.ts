@@ -26,6 +26,7 @@ export type PickerRequest =
       currentFilter: FileFilter | null;
       multiple: boolean;
       modal: boolean;
+      directory: boolean;
       currentFolder: string | null;
       parentWindow: string | null;
     }
@@ -61,3 +62,13 @@ export type PickerResponse =
     }
   | { type: "cancelled"; handle: string }
   | { type: "error"; handle: string; message: string };
+
+/// One filesystem entry as returned by the `list_directory` Tauri
+/// command. The full absolute path is included so callers do not
+/// have to recompose it from `current_dir + name`.
+export interface DirEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isHidden: boolean;
+}

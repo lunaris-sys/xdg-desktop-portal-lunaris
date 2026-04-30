@@ -363,6 +363,7 @@ mod tests {
             current_filter: None,
             multiple: false,
             modal: false,
+            directory: false,
             current_folder: None,
             parent_window: None,
         };
@@ -463,6 +464,7 @@ mod tests {
             current_filter: None,
             multiple: false,
             modal: false,
+            directory: false,
             current_folder: None,
             parent_window: None,
         };
@@ -494,6 +496,7 @@ mod tests {
             current_filter: None,
             multiple: false,
             modal: false,
+            directory: false,
             current_folder: None,
             parent_window: None,
         };
@@ -536,6 +539,7 @@ mod tests {
                 current_filter: None,
                 multiple: false,
                 modal: false,
+            directory: false,
                 current_folder: None,
                 parent_window: None,
             };

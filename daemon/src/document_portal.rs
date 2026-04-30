@@ -68,8 +68,10 @@ trait Documents {
     /// Return the FUSE mount point as a NUL-terminated byte array.
     fn get_mount_point(&self) -> zbus::Result<Vec<u8>>;
 
-    /// Add files for the given app and return per-file doc-ids
-    /// plus an extra-info dict the spec reserves for future use.
+    /// Add existing files for the given app and return per-file
+    /// doc-ids plus an extra-info dict the spec reserves for future
+    /// use. Used for OpenFile/OpenFiles where the caller already
+    /// pointed at real files.
     #[zbus(name = "AddFull")]
     fn add_full(
         &self,
@@ -78,6 +80,20 @@ trait Documents {
         app_id: &str,
         permissions: &[&str],
     ) -> zbus::Result<(Vec<String>, std::collections::HashMap<String, zbus::zvariant::OwnedValue>)>;
+
+    /// Add a not-yet-existing file by parent-dir fd plus filename.
+    /// The Save methods need this because the path the user picks
+    /// may not exist yet — the caller is about to create it. The
+    /// filename is `ay` per the spec (NUL-terminated bytes).
+    #[zbus(name = "AddNamedFull")]
+    fn add_named_full(
+        &self,
+        o_path_parent_fd: Fd<'_>,
+        filename: Vec<u8>,
+        flags: u32,
+        app_id: &str,
+        permissions: &[&str],
+    ) -> zbus::Result<(String, std::collections::HashMap<String, zbus::zvariant::OwnedValue>)>;
 }
 
 /// Exports the given paths via the Document Portal for `app_id` and
@@ -166,6 +182,92 @@ pub async fn export_for_caller(
         .zip(filenames.iter())
         .map(|(doc_id, filename)| assemble_uri(&mount, doc_id, filename))
         .collect();
+
+    Ok(uris)
+}
+
+/// Exports the given Save targets — paths that may not exist yet —
+/// via the Document Portal. Each path's parent directory is opened
+/// O_PATH and `AddNamedFull` is called per-file. Returns the
+/// resulting `file://` URIs that point into the per-app FUSE mount.
+///
+/// `writable` is always true here in practice — Save flows want
+/// write access — but we keep the parameter explicit so the
+/// permissions list stays in one place.
+pub async fn export_named_for_save(
+    connection: &zbus::Connection,
+    app_id: &str,
+    paths: &[PathBuf],
+    writable: bool,
+) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let proxy = tokio::time::timeout(CALL_TIMEOUT, DocumentsProxy::new(connection))
+        .await
+        .context("Document Portal proxy creation timed out")?
+        .context("could not reach Document Portal — is xdg-document-portal running?")?;
+
+    let mount_bytes = tokio::time::timeout(CALL_TIMEOUT, proxy.get_mount_point())
+        .await
+        .context("Document Portal GetMountPoint timed out")?
+        .context("Document Portal GetMountPoint failed")?;
+    let mount = bytes_to_pathbuf(&mount_bytes)
+        .context("Document Portal returned an empty mount point")?;
+
+    let permissions: &[&str] = if writable {
+        &["read", "write"]
+    } else {
+        &["read"]
+    };
+
+    let mut uris = Vec::with_capacity(paths.len());
+    for path in paths {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", path.display()))?;
+        let filename = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if filename.is_empty() {
+            anyhow::bail!("path has no filename: {}", path.display());
+        }
+
+        let parent_file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open(parent)
+            .with_context(|| {
+                format!(
+                    "open parent dir {} for AddNamedFull",
+                    parent.display()
+                )
+            })?;
+        let parent_fd: OwnedFd = parent_file.into();
+        let fd_ref = Fd::from(&parent_fd);
+
+        // Filename wire shape: NUL-terminated bytes (`ay`).
+        let mut filename_bytes = filename.as_bytes().to_vec();
+        filename_bytes.push(0);
+
+        let (doc_id, _extras) = tokio::time::timeout(
+            CALL_TIMEOUT,
+            proxy.add_named_full(
+                fd_ref,
+                filename_bytes,
+                FLAG_REUSE_EXISTING,
+                app_id,
+                permissions,
+            ),
+        )
+        .await
+        .context("Document Portal AddNamedFull timed out")?
+        .context("Document Portal AddNamedFull failed")?;
+
+        uris.push(assemble_uri(&mount, &doc_id, &filename));
+    }
 
     Ok(uris)
 }

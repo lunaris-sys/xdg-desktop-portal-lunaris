@@ -3,6 +3,7 @@
 //! Connects to the daemon's IPC socket, drives request/response
 //! round-trips, and shows/hides the WebviewWindow accordingly.
 
+mod fs_commands;
 mod ipc_client;
 
 use std::sync::Arc;
@@ -67,7 +68,13 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![picker_respond])
+        .invoke_handler(tauri::generate_handler![
+            picker_respond,
+            fs_commands::list_directory,
+            fs_commands::resolve_start_dir,
+            fs_commands::parent_dir,
+            fs_commands::file_exists,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running picker-ui");
 }
